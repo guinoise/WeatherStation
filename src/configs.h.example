@@ -1,0 +1,6 @@
+const char* ssid = "MYSSID";
+const char* password = "MYSSID_PASSWORD";
+
+const char * hostName = "weather.local";
+const char* http_username = "admin";
+const char* http_password = "admin";

@@ -1,0 +1,3 @@
+[submodule "lib/esp8266-weather-station"]
+	path = lib/esp8266-weather-station
+	url = https://github.com/ThingPulse/esp8266-weather-station.git

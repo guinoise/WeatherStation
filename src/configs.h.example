@@ -1,6 +1,11 @@
-const char* ssid = "MYSSID";
-const char* password = "MYSSID_PASSWORD";
+#include <Arduino.h>
+
+const char* WIFI_SSID = "MYSSID";
+const char* WIFI_PWD = "MYSSID_PASSWORD";
 
 const char * hostName = "weather.local";
 const char* http_username = "admin";
 const char* http_password = "admin";
+
+String OPEN_WEATHER_MAP_APP_ID = "XXX";
+String OPEN_WEATHER_MAP_LOCATION_ID = "5937612";

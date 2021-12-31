@@ -1,62 +1,78 @@
-#include <configs.h>
-#include <ESP8266WiFi.h>
-#include <ESPAsyncTCP.h>
-#include <ESPAsyncWebServer.h>
-#include <AsyncElegantOTA.h>
-#include <Arduino.h>
+/**The MIT License (MIT)
 
-// Weather Station Demo
+Copyright (c) 2018 by Daniel Eichhorn - ThingPulse
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+See more at https://thingpulse.com
+*/
+#include "configs.h"
+#include <ESPWiFi.h>
 #include <ESPHTTPClient.h>
 #include <JsonListener.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BME280.h>
 // time
 #include <time.h>                       // time() ctime()
 #include <sys/time.h>                   // struct timeval
 #include <coredecls.h>                  // settimeofday_cb()
-
-#include "SSD1306Wire.h"
+//#include "SSD1306Wire.h"
+#include "SH1106Wire.h"
 #include "OLEDDisplayUi.h"
-#include "Wire.h"
+#include <Wire.h>
 #include "OpenWeatherMapCurrent.h"
 #include "OpenWeatherMapForecast.h"
 #include "WeatherStationFonts.h"
 #include "WeatherStationImages.h"
 
-// Weather Station Demo
 
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-// Variables
-//
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////
-static uint16_t loop_delay = 10000;
-AsyncWebServer server(80);
+// Create the Lightsensor instance
+#define BME_SCK 13
+#define BME_MISO 12
+#define BME_MOSI 11
+#define BME_CS 10
+#define SEALEVELPRESSURE_HPA (1013.25)
+Adafruit_BME280 bme; // I2C
+//DHTesp dht;
+/***************************
+ * Begin Settings
+ **************************/
 
-#define TZ              4       // (utc+) TZ in hours
+String humi1;
+String temp1;
+#define TZ              5       // (utc+) TZ in hours
 #define DST_MN          60      // use 60mn for summer time in some countries
-const int UPDATE_INTERVAL_SECS = 20 * 60; // Update every 20 minutes
 
+// Setup
+const int UPDATE_INTERVAL_SECS = 10 * 60; // Update every 20 minutes
+unsigned long delayTime;
 // Display Settings
-const int I2C_DISPLAY_ADDRESS = 0x3C;
+const int I2C_DISPLAY_ADDRESS = 0x3c;
 #if defined(ESP8266)
 const int SDA_PIN = D2;
 const int SDC_PIN = D1;
+const int DH1=D5;
 #else
-const int SDA_PIN = 5; //D3;
-const int SDC_PIN = 4; //D4;
+const int SDA_PIN = 4; //D2;
+const int SDC_PIN = 5; //D1;
+const int DH1=14;
 #endif
-
-// OpenWeatherMap Settings
-// Sign up here to get an API key:
-// https://docs.thingpulse.com/how-tos/openweathermap-key/
-// String OPEN_WEATHER_MAP_APP_ID = "XXX"; ==> See configs.h
-
-/*
-Go to https://openweathermap.org/find?q= and search for a location. Go through the
-result set and select the entry closest to the actual location you want to display 
-data for. It'll be a URL like https://openweathermap.org/city/2657896. The number
-at the end is what you assign to the constant below.
- */
-// String OPEN_WEATHER_MAP_LOCATION_ID = "2657896";==> See configs.h
 
 // Pick a language code from this list:
 // Arabic - ar, Bulgarian - bg, Catalan - ca, Czech - cz, German - de, Greek - el,
@@ -66,24 +82,24 @@ at the end is what you assign to the constant below.
 // Portuguese - pt, Romanian - ro, Russian - ru, Swedish - se, Slovak - sk,
 // Slovenian - sl, Spanish - es, Turkish - tr, Ukrainian - ua, Vietnamese - vi,
 // Chinese Simplified - zh_cn, Chinese Traditional - zh_tw.
-String OPEN_WEATHER_MAP_LANGUAGE = "fr";
+String OPEN_WEATHER_MAP_LANGUAGE = "en";
 const uint8_t MAX_FORECASTS = 4;
 
 const boolean IS_METRIC = true;
 
 // Adjust according to your language
-const String WDAY_NAMES[] = {"DIM", "LUN", "MAR", "MER", "JEU", "VEN", "SAM"};
-const String MONTH_NAMES[] = {"JAN", "FEV", "MAR", "AVR", "MAI", "JUIN", "JUI", "AOU", "SEP", "OCT", "NOV", "DEC"};
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-// Setup.
-//
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////
+const String WDAY_NAMES[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+const String MONTH_NAMES[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
 
- // Initialize the oled display for address 0x3c (0x78)
+/***************************
+ * End Settings
+ **************************/
+ // Initialize the oled display for address 0x3c
  // sda-pin=14 and sdc-pin=12
- SSD1306Wire     display(I2C_DISPLAY_ADDRESS, SDA_PIN, SDC_PIN);
+ //SSD1306Wire     display(I2C_DISPLAY_ADDRESS, SDA_PIN, SDC_PIN);
+SH1106Wire  display(I2C_DISPLAY_ADDRESS, SDA_PIN, SDC_PIN);
  OLEDDisplayUi   ui( &display );
+
 OpenWeatherMapCurrentData currentWeather;
 OpenWeatherMapCurrent currentWeatherClient;
 
@@ -105,6 +121,7 @@ long timeSinceLastWUpdate = 0;
 //declaring prototypes
 void drawProgress(OLEDDisplay *display, int percentage, String label);
 void updateData(OLEDDisplay *display);
+void drawBME(OLEDDisplay *display,OLEDDisplayUiState* state,int16_t x, int16_t y);
 void drawDateTime(OLEDDisplay *display, OLEDDisplayUiState* state, int16_t x, int16_t y);
 void drawCurrentWeather(OLEDDisplay *display, OLEDDisplayUiState* state, int16_t x, int16_t y);
 void drawForecast(OLEDDisplay *display, OLEDDisplayUiState* state, int16_t x, int16_t y);
@@ -116,19 +133,26 @@ void setReadyForWeatherUpdate();
 // Add frames
 // this array keeps function pointers to all frames
 // frames are the single views that slide from right to left
-FrameCallback frames[] = { drawDateTime, drawCurrentWeather, drawForecast };
-int numberOfFrames = 3;
+FrameCallback frames[] = { drawDateTime, drawCurrentWeather, drawForecast, drawBME};
+int numberOfFrames = 4;
 
 OverlayCallback overlays[] = { drawHeaderOverlay };
 int numberOfOverlays = 1;
 
-
-void setup(void) {
+void setup() {
   Serial.begin(115200);
   Serial.println();
-  Serial.println();
-  Serial.println("============== WEATHER STATION =================");
+  Serial.println(F("BME280 test"));
+  bool status;
+  status = bme.begin(0x76);  
+    if (!status) {
+        Serial.println("Could not find a valid BME280 sensor, check wiring!");
+        while (1);
+        Serial.println("-- Default Test --");
+    delayTime = 1000;
 
+    Serial.println();
+    }
   // initialize dispaly
   display.init();
   display.clear();
@@ -138,44 +162,21 @@ void setup(void) {
   display.setFont(ArialMT_Plain_10);
   display.setTextAlignment(TEXT_ALIGN_CENTER);
   display.setContrast(255);
-
-
-  Serial.println("Setting WIFI_STA mode");
-  WiFi.mode(WIFI_STA);
-  Serial.printf("Setting WiFi hostname %s\n", hostName);
-  WiFi.setHostname(hostName);
-  Serial.printf("Connecting to SSID %s\n", ssid);
-  WiFi.begin(ssid, password);
-  Serial.println("");
-
+  WiFi.begin(WIFI_SSID, WIFI_PWD);
   int counter = 0;
-
-  // Wait for connection
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
     display.clear();
     display.drawString(64, 10, "Connecting to WiFi");
-    display.drawXbm(46, 30, 8, 8, counter % 3 == 0 ? activeSymbole : inactiveSymbole);
-    display.drawXbm(60, 30, 8, 8, counter % 3 == 1 ? activeSymbole : inactiveSymbole);
-    display.drawXbm(74, 30, 8, 8, counter % 3 == 2 ? activeSymbole : inactiveSymbole);
+    display.drawXbm(40, 30, 8, 8, counter % 3 == 0 ? activeSymbole : inactiveSymbole);
+    display.drawXbm(54, 30, 8, 8, counter % 3 == 1 ? activeSymbole : inactiveSymbole);
+    display.drawXbm(68, 30, 8, 8, counter % 3 == 2 ? activeSymbole : inactiveSymbole);
     display.display();
 
-    counter++;    
+    counter++;
   }
-  Serial.println("");
-  Serial.printf("Connected to : %s \n", ssid);
-  Serial.printf("IP address   : %s \n", WiFi.localIP().toString());
-
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send(200, "text/plain", "Hi! I am ESP8266.");
-  });
-
-  AsyncElegantOTA.begin(&server);    // Start ElegantOTA
-  server.begin();
-  Serial.println("HTTP server started");
-
- // Get time from network time service
+  // Get time from network time service
   configTime(TZ_SEC, DST_SEC, "pool.ntp.org");
 
   ui.setTargetFPS(30);
@@ -204,16 +205,11 @@ void setup(void) {
   Serial.println("");
 
   updateData(&display);
+
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-// Loop.
-//
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-void loop(void) {
-    if (millis() - timeSinceLastWUpdate > (1000L*UPDATE_INTERVAL_SECS)) {
+void loop() {
+  if (millis() - timeSinceLastWUpdate > (1000L*UPDATE_INTERVAL_SECS)) {
     setReadyForWeatherUpdate();
     timeSinceLastWUpdate = millis();
   }
@@ -260,7 +256,25 @@ void updateData(OLEDDisplay *display) {
   delay(1000);
 }
 
+void drawBME(OLEDDisplay *display,OLEDDisplayUiState* state,int16_t x, int16_t y){
 
+ float temp1=bme.readTemperature();
+  float pres1=bme.readPressure()/100.0F;
+  float humi1=bme.readHumidity();
+  delay(delayTime);
+  display->setTextAlignment(TEXT_ALIGN_CENTER);
+  display->setFont(ArialMT_Plain_16);
+  String humi=(IS_METRIC ? "H:" : "H:")+String(humi1, 1)+(IS_METRIC ? "%" : "%");
+  display->drawString(64+x, y, humi);
+  display->setTextAlignment(TEXT_ALIGN_CENTER);
+  display->setFont(ArialMT_Plain_16);
+  String temp=(IS_METRIC ? " T:" : "T:")+String(temp1, 1)+(IS_METRIC ? "��C" : "��F");
+  display->drawString(64+x, 15+y, temp);
+  display->setTextAlignment(TEXT_ALIGN_CENTER);
+  display->setFont(ArialMT_Plain_16);
+  String pres=(IS_METRIC ? " P:" : "P:")+String(pres1, 1)+(IS_METRIC ? "hPa" : "hPa");
+  display->drawString(64+x, 30+y, pres);
+  }
 
 void drawDateTime(OLEDDisplay *display, OLEDDisplayUiState* state, int16_t x, int16_t y) {
   now = time(nullptr);
@@ -289,7 +303,7 @@ void drawCurrentWeather(OLEDDisplay *display, OLEDDisplayUiState* state, int16_t
 
   display->setFont(ArialMT_Plain_24);
   display->setTextAlignment(TEXT_ALIGN_LEFT);
-  String temp = String(currentWeather.temp, 1) + (IS_METRIC ? "°C" : "°F");
+  String temp = String(currentWeather.temp, 1) + (IS_METRIC ? "��C" : "��F");
   display->drawString(60 + x, 5 + y, temp);
 
   display->setFont(Meteocons_Plain_36);
@@ -314,7 +328,7 @@ void drawForecastDetails(OLEDDisplay *display, int x, int y, int dayIndex) {
 
   display->setFont(Meteocons_Plain_21);
   display->drawString(x + 20, y + 12, forecasts[dayIndex].iconMeteoCon);
-  String temp = String(forecasts[dayIndex].temp, 0) + (IS_METRIC ? "°C" : "°F");
+  String temp = String(forecasts[dayIndex].temp, 0) + (IS_METRIC ? "��C" : "��F");
   display->setFont(ArialMT_Plain_10);
   display->drawString(x + 20, y + 34, temp);
   display->setTextAlignment(TEXT_ALIGN_LEFT);
@@ -332,7 +346,7 @@ void drawHeaderOverlay(OLEDDisplay *display, OLEDDisplayUiState* state) {
   display->setTextAlignment(TEXT_ALIGN_LEFT);
   display->drawString(0, 54, String(buff));
   display->setTextAlignment(TEXT_ALIGN_RIGHT);
-  String temp = String(currentWeather.temp, 1) + (IS_METRIC ? "°C" : "°F");
+  String temp = String(currentWeather.temp, 1) + (IS_METRIC ? "��C" : "��F");
   display->drawString(128, 54, temp);
   display->drawHorizontalLine(0, 52, 128);
 }
